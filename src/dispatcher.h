@@ -14,6 +14,9 @@ public:
     void PostTask(std::function<void(void)> task);
     void PostTask(std::function<void(void)>task, std::chrono::steady_clock::duration dur);
     void AddSignalHandler(int sig_number, std::function<void(int)> handler);
+    inline boost::asio::io_service *IOService() {
+        return &ios_;
+    }
 
 private:
     boost::asio::io_service ios_;

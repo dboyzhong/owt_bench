@@ -21,7 +21,7 @@
 #include "owt/base/publication.h"
 #include "EncodedVideoInput.h"
 #include "YuvVideoInput.h"
-#include "cxxopts.hpp"
+//#include "cxxopts.hpp"
 #include "dispatcher.h"
 #include "logger.h"
 
@@ -58,7 +58,7 @@ private:
 class Processor;
 class PubObserver : public PublicationObserver {
 public:
-    PubObserver(shared_ptr<Processor> processor, string pub_id);
+    PubObserver(shared_ptr<Processor> processor, string pub_id, bool is_video);
     void OnEnded() override; 
     void OnMute(TrackKind track_kind) override;
     void OnUnmute(TrackKind track_kind) override;
@@ -66,11 +66,12 @@ public:
 protected:
     shared_ptr<Processor> processor_;
     string pub_id_;
+    bool is_video_;
 };
 
 class SubObserver : public SubscriptionObserver {
 public:
-    SubObserver(shared_ptr<Processor> processor, string stream_id);
+    SubObserver(shared_ptr<Processor> processor, string stream_id, string sub_id_);
     void OnEnded() override; 
     void OnMute(TrackKind track_kind) override;
     void OnUnmute(TrackKind track_kind) override;
@@ -78,6 +79,7 @@ public:
 protected:
     shared_ptr<Processor> processor_;
     string stream_id_;
+    string sub_id_;
 };
 
 struct VideoConfig {
@@ -92,8 +94,12 @@ struct ProcessorConfig {
     string file;
     string server_url;
     string room_id;
+    string role;
     int    pub_num = 0;
     int    sub_num = 0;
+    int    num     = 0;
+    bool   audio_enable = true;
+    bool   video_enable = false;
     VideoConfig video_cfg;
 };
 
@@ -112,11 +118,16 @@ public:
         dispatcher_(dispatcher), cfg_(std::move(cfg)) {};
     //bool Init(std::shared_ptr<owt::conference::ConferenceClient> room,
     //          std::shared_ptr<ConferenceInfo> info);
-    bool Init();
+    bool Start();
     bool Run();
     void Stop(std::function<void(void)> handler);
 
 protected:
+    bool GetToken(std::string room, std::string user_name, std::function<void(bool, string)> cb);
+    bool Mix(std::string room, std::string pub_id, std::function<void(bool)> cb);
+    bool Join(std::string room, std::string user_name, 
+                std::function<void(bool,std::shared_ptr<ConferenceInfo> info, 
+                                    shared_ptr<owt::conference::ConferenceClient> room)> cb);
     bool StartSubscribe();
     bool StartPublish();
     bool RemoveSubscribe(string stream_id, std::function<void(void)> cb);
@@ -125,6 +136,9 @@ protected:
     void Ticker();
     void SubscribeStat();
     void PublishStat();
+    void SubscribeOne(bool mixed, std::function<void(bool, shared_ptr<ConferenceSubscription>)> handler);
+    void PublishOne(bool is_video, 
+                      std::function<void(bool, shared_ptr<ConferencePublication>)> handler);
 
 protected:
 
@@ -143,4 +157,6 @@ protected:
     shared_ptr<Dispatcher> dispatcher_;
     std::promise<bool> pro_;
     std::future<bool>  fut_;
+    vector<shared_ptr<owt::conference::ConferenceClient>> sub_rooms_;
+    vector<shared_ptr<ConferenceInfo>> sub_conference_infos_;
 };

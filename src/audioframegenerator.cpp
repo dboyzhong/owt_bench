@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2
 
-#include "stdafx.h"
 #include <fstream>
 #include "audioframegenerator.h"
 
@@ -13,8 +12,9 @@ AudioFrameGenerator::AudioFrameGenerator(std::string path, int channelNumber, in
     sampleRate_ = sampleRate;
     bitsPerSample_ = 2;
     framesize_ = channelNumber_*bitsPerSample_*sampleRate_;
+    //framesize_ = channelNumber_*bitsPerSample_*960;
     framesForNext10Ms_ = framesize_ * 10 / 1000;
-    fopen_s(&fd, path_.c_str(), "rb");
+    fd = fopen(path_.c_str(), "rb");
     if (!fd) {
         std::cout << "Failed to open the " << path_.c_str() << std::endl;
     }
