@@ -11,8 +11,6 @@
 #include "httpclient/asynchttpclient.h"
 #include "audioframegenerator.h"
 
-//bool Processor::Init(std::shared_ptr<owt::conference::ConferenceClient> room, 
-//                     std::shared_ptr<ConferenceInfo> info) {
 bool Processor::GetToken(std::string room, std::string user_name, std::function<void(bool, string)> cb) {
 
 	std::string content;
@@ -85,7 +83,7 @@ bool Processor::Start() {
     ss << cfg_.server_url << "/CreateToken";
     owt::base::GlobalConfiguration::SetEncodedVideoFrameEnabled(true);
     owt::base::GlobalConfiguration::SetCustomizedAudioInputEnabled(true, 
-                               make_unique<AudioFrameGenerator>("./source.pcm", 2, 48000));
+                               make_unique<AudioFrameGenerator>(cfg_.audio_file, 2, 48000));
 
     room_ = ConferenceClient::Create(owt::conference::ConferenceClientConfiguration());
     GetToken(cfg_.room_id, "test_zhong", [this](bool ret, string token){
@@ -109,9 +107,6 @@ bool Processor::Start() {
 
 bool Processor::Run() {
 
-    //if(false == fut_.get()) {
-    //    return false;
-    //}
     dispatcher_->PostTask([this](){
         if(cfg_.role == "pub") {
             StartPublish();
@@ -132,9 +127,10 @@ void Processor::Stop(std::function<void(void)> handler) {
         for(auto it = subscribe_infos_.begin(); it != subscribe_infos_.end();) {
             std::get<0>(it->second)->DetachVideoRenderer();
             std::get<3>(it->second)->RemoveObserver(*std::get<1>(it->second));
+            std::get<3>(it->second)->Stop();
             it = subscribe_infos_.erase(it);
             LOG::info("stop subscribe stream: {}", it->first);
-        }   
+        } 
         
         for(auto it = publish_infos_.begin(); it != publish_infos_.end();) {
             std::get<0>(it->second)->RemoveObserver(*std::get<1>(it->second));
@@ -209,8 +205,10 @@ void Processor::SubscribeOne(bool mixed,
             }
             int id = rand() % remote_streams.size();
             while(true) {
-                if(remote_streams[id]->Source().video != VideoSourceInfo::kMixed) {
-                    LOG::info("subscribe video found forward video: {}", remote_streams[id]->Id());
+                if((remote_streams[id]->Source().video != VideoSourceInfo::kMixed) && 
+                        (remote_streams[id]->Source().video != VideoSourceInfo::kUnknown)) {
+                    LOG::info("subscribe video found forward video: {}, type: {}", 
+                            remote_streams[id]->Id(), remote_streams[id]->Source().video);
                     break;
                 } else {
                     id = (++id) % remote_streams.size();
@@ -253,7 +251,7 @@ void Processor::PublishOne(bool is_video,
     } else {
         lcsp.reset(new LocalCustomizedStreamParameters(true, false));
     } 
-    //shared_ptr<LocalCustomizedStreamParameters> lcsp(new LocalCustomizedStreamParameters(true, true));
+
     lcsp->Resolution(cfg_.video_cfg.width, cfg_.video_cfg.height);
     lcsp->Fps(cfg_.video_cfg.fps);
     auto local_stream = LocalStream::Create(lcsp, external_encoder);
@@ -263,6 +261,7 @@ void Processor::PublishOne(bool is_video,
     VideoEncodingParameters encoding_params(codec_params, 4000, true);
     AudioEncodingParameters audio_params;
     audio_params.codec.name = owt::base::AudioCodec::kOpus;
+    audio_params.codec.channel_count = 2;
     options.video.push_back(encoding_params);
     options.audio.push_back(audio_params);
 
@@ -270,7 +269,7 @@ void Processor::PublishOne(bool is_video,
     room_->Publish(local_stream,
         options,
         [=](std::shared_ptr<ConferencePublication> publication) {
-            dispatcher_->PostTask([this, publication, is_video, handler](){
+            dispatcher_->PostTask([this, publication, is_video, handler, local_stream]() mutable {
                 std::string pub_id = publication->Id();
                 std::string room_id = info_->Id();
                 if(!is_video) {
@@ -284,18 +283,12 @@ void Processor::PublishOne(bool is_video,
                 publication->AddObserver(*std::get<1>(info));
                 LOG::info("publish success publication_id: {}", pub_id);
                 publish_infos_.emplace(pub_id, std::move(info));
+                local_streams_.emplace_back(local_stream);
                 handler(true, publication);
             });
         },[=](unique_ptr<Exception> err) {
-            //LOG::error("publish failed");
-            //dispatcher_->PostTask([this, is_video, handler]{
-            //    pub_count--;
-            //    //StartPublish();
-            //    LOG::info("re publish stream");
-            //    dispatcher_->PostTask([this, is_video, handler](){
-            //        PublishOne(is_video, handler);
-            //    }, std::chrono::seconds(2));
-            //});
+            handler(false, nullptr);
+            LOG::error("publish stream failed");
     });
 }
 
@@ -349,134 +342,6 @@ bool Processor::StartPublish() {
     return true;
 }
 
-/*bool Processor::StartSubscribe() {
-
-    if(0 == cfg_.sub_num) {
-        return true;
-    }
-    std::vector<std::shared_ptr<RemoteStream>> remote_streams = info_->RemoteStreams();
-    //int count = subscribe_infos_.size();
-    for (auto& remote_stream : remote_streams) {
-
-        if(sub_count >= cfg_.sub_num) {
-            LOG::info("subscribe stream reach max count {} ", cfg_.sub_num);
-            break;
-        }
-
-        if(subscribe_infos_.find(remote_stream->Id()) != subscribe_infos_.end()) {
-            LOG::info("subscribe stream: {}, already exist!", remote_stream->Id());
-            continue;
-        }
-
-        if(remote_stream->Source().video == VideoSourceInfo::kMixed) {
-            continue;
-        }
-        sub_count++;
-        LOG::info("subscribe stream: {} start", remote_stream->Id());
-        auto resoltutions = remote_stream->Capabilities().video.resolutions;
-        auto bitrates = remote_stream->Capabilities().video.bitrate_multipliers;
-        auto framerates = remote_stream->Capabilities().video.frame_rates;
-        SubscribeOptions options;
-        room_->Subscribe(remote_stream,
-            options,
-            [this, remote_stream](std::shared_ptr<ConferenceSubscription> subscription) mutable {
-                //mix_subscription_ = subscription;
-                dispatcher_->PostTask([this, remote_stream, subscription](){
-                    LOG::info("subscribe success, stream_id:{}, subscribtion_id:{}", 
-                        remote_stream->Id(), subscription->Id());
-                    SubscribeInfo info = std::make_tuple(remote_stream, 
-                        make_shared<SubObserver>(shared_from_this(), remote_stream->Id()),
-                        make_shared<VideoRendererMem>(subscription->Id()), 
-                        subscription);
-                    subscription->AddObserver(*std::get<1>(info));
-                    remote_stream->AttachVideoRenderer(*std::get<2>(info));
-                    subscribe_infos_.emplace(remote_stream->Id(), std::move(info));
-                });
-            },
-            [=](std::unique_ptr<Exception>) {
-                LOG::error("subscribe error, stream_id:{}", remote_stream->Id());
-                //dispatcher_->PostTask([this]{
-                //    StartSubscribe();
-                //}, std::chrono::seconds(5));
-                dispatcher_->PostTask([this](){
-                    sub_count--;
-                });
-        });
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-   	}
-    return true;
-}*/
-
-/*bool Processor::StartPublish() {
-
-    if(0 == cfg_.pub_num) {
-        LOG::info("disable publish");
-        return true;
-    }
-
-    //if(publish_infos_.size() > cfg_.pub_num) {
-    if(pub_count > cfg_.pub_num) {
-        LOG::info("publish reach max: {}", cfg_.pub_num);
-        return true;
-    }
-
-    //for(int i = publish_infos_.size(); i < cfg_.pub_num; i++) {
-    while(pub_count++ < cfg_.pub_num) {
-        //std::unique_ptr<FileFrameGenerator> framer(new FileFrameGenerator(960, 540, 30));
-#if 0
-        std::unique_ptr<FileFrameGenerator> framer(
-            new FileFrameGenerator(cfg_.video_cfg.width, cfg_.video_cfg.height, cfg_.video_cfg.fps));
-        shared_ptr<LocalCustomizedStreamParameters> lcsp(new LocalCustomizedStreamParameters(true, true));
-        auto local_stream = LocalStream::Create(lcsp, std::move(framer));
-#endif
-        owt::base::VideoEncoderInterface* external_encoder = DirectVideoEncoder::Create(owt::base::VideoCodec::kH264);
-        owt::base::Resolution resolution(640, 480);
-        shared_ptr<LocalCustomizedStreamParameters> lcsp(new LocalCustomizedStreamParameters(true, false));
-        lcsp->Resolution(cfg_.video_cfg.width, cfg_.video_cfg.height);
-        lcsp->Fps(cfg_.video_cfg.fps);
-        auto local_stream = LocalStream::Create(lcsp, external_encoder);
-
-        local_streams_.push_back(local_stream);
-
-        PublishOptions options;
-        VideoCodecParameters codec_params;
-        codec_params.name = owt::base::VideoCodec::kH264;
-        VideoEncodingParameters encoding_params(codec_params, 4000, true);
-        AudioEncodingParameters audio_params;
-        audio_params.codec.name = owt::base::AudioCodec::kOpus;
-        options.video.push_back(encoding_params);
-        options.audio.push_back(audio_params);
-
-        LOG::info("publish new stream...");
-        room_->Publish(local_stream,
-            options,
-            [=](std::shared_ptr<ConferencePublication> publication) {
-
-                dispatcher_->PostTask([this, publication](){
-                    std::string pub_id = publication->Id();
-                    std::string room_id = info_->Id();
-                    Mix(room_id, pub_id,[](bool success){
-                        LOG::info("mix stream: {}", success);
-                    });
-
-                    auto info = std::make_tuple(publication,
-                                                make_shared<PubObserver>(shared_from_this(), pub_id));
-                    publication->AddObserver(*std::get<1>(info));
-                    LOG::info("publish success publication_id: {}", pub_id);
-                    publish_infos_.emplace(pub_id, std::move(info));
-                });
-            },[=](unique_ptr<Exception> err) {
-                LOG::error("publish failed");
-                dispatcher_->PostTask([this]{
-                    pub_count--;
-                    //StartPublish();
-                });
-        });
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-    }
-    return true;
-}*/
-
 void Processor::RemoveNotAliveStream() {
     std::vector<std::shared_ptr<RemoteStream>> remote_streams = info_->RemoteStreams();
     for(auto it = subscribe_infos_.begin(); it != subscribe_infos_.end();) {
@@ -501,8 +366,8 @@ void Processor::RemoveNotAliveStream() {
 bool Processor::RemoveSubscribe(string sub_id, std::function<void(void)> cb) {
     dispatcher_->PostTask([this, sub_id, cb](){
         if(subscribe_infos_.find(sub_id) != subscribe_infos_.end()) {
-            //std::get<0>(subscribe_infos_[stream_id])->DetachVideoRenderer();
-            //std::get<3>(subscribe_infos_[stream_id])->RemoveObserver(*std::get<1>(subscribe_infos_[stream_id]));
+            std::get<0>(subscribe_infos_[sub_id])->DetachVideoRenderer();
+            std::get<3>(subscribe_infos_[sub_id])->RemoveObserver(*std::get<1>(subscribe_infos_[sub_id]));
             subscribe_infos_.erase(sub_id);
             sub_count--;
             LOG::info("remove subscribe stream with sub_id {}", sub_id);
@@ -515,10 +380,10 @@ bool Processor::RemoveSubscribe(string sub_id, std::function<void(void)> cb) {
 bool Processor::RemovePublish(string pub_id, std::function<void(void)> cb) {
     dispatcher_->PostTask([this, pub_id, cb](){
         if(publish_infos_.find(pub_id) != publish_infos_.end()) {
-            //std::get<0>(publish_infos_[pub_id])->RemoveObserver(*std::get<1>(publish_infos_[pub_id]));
-            //if(!std::get<0>(publish_infos_[pub_id])->Ended()) {
-            //    std::get<0>(publish_infos_[pub_id])->Stop();
-            //}
+            std::get<0>(publish_infos_[pub_id])->RemoveObserver(*std::get<1>(publish_infos_[pub_id]));
+            if(!std::get<0>(publish_infos_[pub_id])->Ended()) {
+                std::get<0>(publish_infos_[pub_id])->Stop();
+            }
             publish_infos_.erase(pub_id);
             pub_count--;
             LOG::info("remove publish id: {}", pub_id);
@@ -561,8 +426,6 @@ void Processor::Ticker() {
     //RemoveNotAliveStream();
     PublishStat();
     SubscribeStat();
-    //StartPublish();
-    //StartSubscribe();
     dispatcher_->PostTask([this]{
         Ticker();
     }, std::chrono::seconds(5));
@@ -575,7 +438,8 @@ PubObserver::PubObserver(shared_ptr<Processor> processor, string pub_id, bool is
 
 void PubObserver::OnEnded() {
     LOG::info("publish stream: {} end", pub_id_);
-    //processor_->RemovePublish(pub_id_);
+    processor_->RemovePublish(pub_id_, [this]{
+    });
 }
 
 void PubObserver::OnMute(TrackKind track_kind) {
@@ -588,12 +452,8 @@ void PubObserver::OnUnmute(TrackKind track_kind) {
 
 void PubObserver::OnError(std::unique_ptr<Exception> failure) {
     LOG::error("publish stream: {} error: {}", pub_id_, failure->Message());
-    //processor_->RemovePublish(pub_id_, [this]{
-    //    processor_->PublishOne(is_video_, 
-    //        [](bool success, shared_ptr<owt::conference::ConferencePublication> publication){
-
-    //    });
-    //});
+    processor_->RemovePublish(pub_id_, [this]{
+    });
 };
 
 SubObserver::SubObserver(shared_ptr<Processor> processor, string stream_id, string sub_id):
@@ -603,7 +463,8 @@ SubObserver::SubObserver(shared_ptr<Processor> processor, string stream_id, stri
 
 void SubObserver::OnEnded() {
     LOG::info("subscribe stream: {} end", stream_id_);
-    //processor_->RemoveSubscribe(stream_id_);
+    processor_->RemoveSubscribe(sub_id_, [this]{
+    });
 }
 
 void SubObserver::OnMute(TrackKind track_kind) {
@@ -616,7 +477,6 @@ void SubObserver::OnUnmute(TrackKind track_kind) {
 
 void SubObserver::OnError(std::unique_ptr<Exception> failure) {
     LOG::error("subscribe stream: {} error: {}", stream_id_, failure->Message());
-    //processor_->RemoveSubscribe(sub_id_, [this]{
-    //    //processor_->SubscribeOne()
-    //});
+    processor_->RemoveSubscribe(sub_id_, [this]{
+    });
 };

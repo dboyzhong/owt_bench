@@ -11,8 +11,8 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include "dispatcher.h"
 
-#define DEFAULT_SERVER  "http://10.208.135.79:3001/CreateToken"
-#define DEFAULT_ROOM_ID "5e78cecf15342f2cbf46f885"
+#define DEFAULT_SERVER  "http://10.209.22.248:3001/CreateToken"
+#define DEFAULT_ROOM_ID "5e796edf6e34e91e95ed31fa"
 
 using namespace std;
 using namespace owt::conference;
@@ -23,18 +23,18 @@ int main(int argc, char **argv) {
 
     cxxopts::Options options("owt-benchmark", "owt benchmark");
     options.add_options()
-        ("f,file", "yuv raw video file name", cxxopts::value<std::string>()->default_value("./source.yuv")) 
-        ("W,width", "yuv raw video width", cxxopts::value<int>()->default_value("960"))
-        ("H,height", "yuv raw video height", cxxopts::value<int>()->default_value("540"))
-        ("F,fps", "yuv raw video fps", cxxopts::value<int>()->default_value("30"))
-        ("p,publish_num", "publish number", cxxopts::value<int>()->default_value("0"))
-        ("s,subscribe_num", "subscribe number", cxxopts::value<int>()->default_value("0"))
+        ("video-file", "video file name", cxxopts::value<std::string>()->default_value("./source.h264")) 
+        ("audio-file", "audil file name", cxxopts::value<std::string>()->default_value("./source.pcm")) 
+        ("W,width", "video width", cxxopts::value<int>()->default_value("960"))
+        ("H,height", "video height", cxxopts::value<int>()->default_value("540"))
+        ("F,fps", "video fps", cxxopts::value<int>()->default_value("30"))
         ("u,url", "server url", cxxopts::value<std::string>()->default_value("http://10.208.135.79:3001"))
         ("r,room_id", "room id", cxxopts::value<std::string>()->default_value("5e78cecf15342f2cbf46f885"))
         ("R,role", "role : pub or sub", cxxopts::value<std::string>()->default_value("pub"))
         ("n,num", "concurrency num", cxxopts::value<int>()->default_value("1"))
         ("a,audio_enable", "audio enable", cxxopts::value<int>()->default_value("1"))
         ("v,video_enable", "video enable", cxxopts::value<int>()->default_value("0"))
+        ("d,duration", "test duration", cxxopts::value<int>()->default_value("10"))
         ("h,help", "print help");
 
     auto result = options.parse(argc, argv);
@@ -44,18 +44,18 @@ int main(int argc, char **argv) {
     }
 
     ProcessorConfig cfg;
-    cfg.file = result["file"].as<string>();
+    cfg.video_file = result["video-file"].as<string>();
+    cfg.audio_file = result["audio-file"].as<string>();
     cfg.server_url = result["url"].as<string>();
     cfg.room_id = result["room_id"].as<string>();
     cfg.role    = result["role"].as<string>();
-    cfg.pub_num = result["publish_num"].as<int>();
-    cfg.sub_num = result["subscribe_num"].as<int>();
     cfg.num = result["num"].as<int>();
     cfg.video_cfg.width = result["width"].as<int>();
     cfg.video_cfg.height = result["height"].as<int>();
     cfg.video_cfg.fps = result["fps"].as<int>();
     cfg.audio_enable = result["audio_enable"].as<int>();
     cfg.video_enable = result["video_enable"].as<int>();
+    int test_duration = result["duration"].as<int>();
 
 
     auto dispatcher = make_shared<Dispatcher>();
@@ -70,7 +70,12 @@ int main(int argc, char **argv) {
         }
     });
     processor->Start();
-    //processor->Run();
+    dispatcher->PostTask([processor, dispatcher](){
+        processor->Stop([dispatcher]{
+            dispatcher->SyncStop();
+        });
+    }, std::chrono::seconds(test_duration));
     dispatcher->Run();
+    LOG::info("exitted...");
     return 0;
 }

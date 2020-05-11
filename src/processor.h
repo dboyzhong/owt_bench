@@ -91,7 +91,8 @@ struct VideoConfig {
 };
 
 struct ProcessorConfig {
-    string file;
+    string video_file;
+    string audio_file;
     string server_url;
     string room_id;
     string role;
@@ -116,8 +117,6 @@ public:
 
     Processor(shared_ptr<Dispatcher> dispatcher, ProcessorConfig cfg):
         dispatcher_(dispatcher), cfg_(std::move(cfg)) {};
-    //bool Init(std::shared_ptr<owt::conference::ConferenceClient> room,
-    //          std::shared_ptr<ConferenceInfo> info);
     bool Start();
     bool Run();
     void Stop(std::function<void(void)> handler);

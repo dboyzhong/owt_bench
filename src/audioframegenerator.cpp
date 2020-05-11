@@ -4,15 +4,15 @@
 
 #include <fstream>
 #include "audioframegenerator.h"
+#include "logger.h"
 
-AudioFrameGenerator::AudioFrameGenerator(std::string path, int channelNumber, int sampleRate)
+AudioFrameGenerator::AudioFrameGenerator(std::string path, int channelNumber, int sampleRate):fd(nullptr)
 {
     path_ = path;
     channelNumber_ = channelNumber;
     sampleRate_ = sampleRate;
     bitsPerSample_ = 2;
     framesize_ = channelNumber_*bitsPerSample_*sampleRate_;
-    //framesize_ = channelNumber_*bitsPerSample_*960;
     framesForNext10Ms_ = framesize_ * 10 / 1000;
     fd = fopen(path_.c_str(), "rb");
     if (!fd) {
@@ -25,7 +25,10 @@ AudioFrameGenerator::AudioFrameGenerator(std::string path, int channelNumber, in
 
 AudioFrameGenerator::~AudioFrameGenerator()
 {
-    fclose(fd);
+    if(fd) {
+        fclose(fd);
+        fd = nullptr;
+    }
 }
 
 int AudioFrameGenerator::GetSampleRate() {
